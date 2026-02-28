@@ -38,5 +38,30 @@ void model_init(Model *m){
     for(int i=0;i<V;i++){
         m->output.b[i]=0.0f;
     }
-    
+}
+// zero out gradients before backprop
+    void model_zero_grad(Model *m){
+        int V= m->vocab_size;;
+        int D= m->embed_dim;
+        memset(m->embedding.grad_weight,0,V*D*sizeof(float));
+        memset(m->output.grad_W,0,D*V*sizeof(float));
+        memset(m->output.grad_b,0,V*sizeof(float));
+    }
+//forward pass
+void model_forward(Model *m, uint16_t *input_tokens){
+    int V= m->vocab_size;
+    int D= m->embed_dim;
+    for(int t=0;t<SEQ_LEN;t++){
+        uint16_t token=input_tokens[t];
+        for(int d=0;d<D;d++){
+            m->embed_buffer[t*D+d]= m->embedding.weight[token*D+d];
+        }
+        for(int v=0;v<V;v++){
+            float sum= m->output.b[v];
+            for(int d= 0;d<D;d++){
+                sum+=m->embed_buffer[t*D+d]*m->output.W[d*V+v];;
+            }
+            m->logit_buffer[t*V+v]=sum;
+        }
+    }
 }
