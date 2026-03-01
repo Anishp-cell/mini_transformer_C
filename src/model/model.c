@@ -15,29 +15,55 @@ static float ran_normal(){
 
 //model initialization
 void model_init(Model *m){
-    m->vocab_size= VOCAB_SIZE;
-    m->embed_dim=EMBED_DIM;
- 
-    int V= m->vocab_size;
-    int D= m->embed_dim;
-       //allocate embedding weights and gradients
-    m->embedding.weight= (float*)malloc(V*D*sizeof(float));
-    m->embedding.grad_weight= (float*)malloc(V*D*sizeof(float));
-    //allocate output layer and gradients
-    m->output.W= malloc(D*V*sizeof(float));
-    m->output.b= malloc(V*sizeof(float));
-    m->output.grad_W= malloc(D*V*sizeof(float));
-    m->output.grad_b= malloc(V*sizeof(float));
-    //initialize weights with small random values
-    for(int i=0; i<V*D;i++){
-        m->embedding.weight[i]= ran_normal()* INIT_STD;
-    } 
-    for(int i= 0;i<D*V;i++){
-        m->output.W[i]= ran_normal()*INIT_STD;
-    }
-    for(int i=0;i<V;i++){
-        m->output.b[i]=0.0f;
-    }
+
+    m->vocab_size = VOCAB_SIZE;
+    m->embed_dim  = EMBED_DIM;
+
+    int V = m->vocab_size;
+    int D = m->embed_dim;
+
+    /* =========================
+       Allocate embedding
+    ========================= */
+    m->embedding.weight = (float*)malloc(V * D * sizeof(float));
+    m->embedding.grad_weight = (float*)malloc(V * D * sizeof(float));
+
+    /* =========================
+       Allocate output layer
+    ========================= */
+    m->output.W = (float*)malloc(D * V * sizeof(float));
+    m->output.b = (float*)malloc(V * sizeof(float));
+    m->output.grad_W = (float*)malloc(D * V * sizeof(float));
+    m->output.grad_b = (float*)malloc(V * sizeof(float));
+
+    /* =========================
+       Allocate forward buffers
+    ========================= */
+    m->embed_buffer =
+        (float*)malloc(SEQ_LEN * D * sizeof(float));
+
+    m->logit_buffer =
+        (float*)malloc(SEQ_LEN * V * sizeof(float));
+
+    /* =========================
+       Allocate backward buffer
+    ========================= */
+    m->d_embed_buffer =
+        (float*)malloc(SEQ_LEN * D * sizeof(float));
+
+    /* =========================
+       Initialize weights
+    ========================= */
+    for(int i = 0; i < V * D; i++)
+        m->embedding.weight[i] = ran_normal() * INIT_STD;
+
+    for(int i = 0; i < D * V; i++)
+        m->output.W[i] = ran_normal() * INIT_STD;
+
+    for(int i = 0; i < V; i++)
+        m->output.b[i] = 0.0f;
+
+    printf("Model initialized.\n");
 }
 // zero out gradients before backprop
     void model_zero_grad(Model *m){
