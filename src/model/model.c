@@ -4,6 +4,7 @@
 #include <math.h>
 #include <string.h>
 #include "model.h"
+#include "../layers/layernorm.h"
 
 // box muller transform for normal distribution sampling
 static float ran_normal(){
@@ -22,38 +23,29 @@ void model_init(Model *m){
     int V = m->vocab_size;
     int D = m->embed_dim;
 
-    /* =========================
-       Allocate embedding
-    ========================= */
+    //    Allocate embedding
+
     m->embedding.weight = (float*)malloc(V * D * sizeof(float));
     m->embedding.grad_weight = (float*)malloc(V * D * sizeof(float));
 
-    /* =========================
-       Allocate output layer
-    ========================= */
+  
+    //    Allocate output layer
+  
     m->output.W = (float*)malloc(D * V * sizeof(float));
     m->output.b = (float*)malloc(V * sizeof(float));
     m->output.grad_W = (float*)malloc(D * V * sizeof(float));
     m->output.grad_b = (float*)malloc(V * sizeof(float));
 
-    /* =========================
-       Allocate forward buffers
-    ========================= */
-    m->embed_buffer =
-        (float*)malloc(SEQ_LEN * D * sizeof(float));
+    //    Allocate forward buffers
 
-    m->logit_buffer =
-        (float*)malloc(SEQ_LEN * V * sizeof(float));
-
-    /* =========================
-       Allocate backward buffer
-    ========================= */
-    m->d_embed_buffer =
-        (float*)malloc(SEQ_LEN * D * sizeof(float));
-
-    /* =========================
-       Initialize weights
-    ========================= */
+    m->embed_buffer =(float*)malloc(SEQ_LEN * D * sizeof(float));
+    m->logit_buffer =(float*)malloc(SEQ_LEN * V * sizeof(float));
+    //    Allocate backward buffer
+    m->d_embed_buffer =(float*)malloc(SEQ_LEN * D * sizeof(float));
+    m->ln_buffer= (float*)malloc(SEQ_LEN*D*sizeof(float));
+    //    Initialize layer norm
+    layernorm_init(&m->ln);
+    //    Initialize weights
     for(int i = 0; i < V * D; i++)
         m->embedding.weight[i] = ran_normal() * INIT_STD;
 
@@ -72,20 +64,25 @@ void model_init(Model *m){
         memset(m->embedding.grad_weight,0,V*D*sizeof(float));
         memset(m->output.grad_W,0,D*V*sizeof(float));
         memset(m->output.grad_b,0,V*sizeof(float));
+        layernorm_zero_grad(&m->ln);
     }
 //forward pass
 void model_forward(Model *m, uint16_t *input_tokens){
     int V= m->vocab_size;
     int D= m->embed_dim;
+    //embedding lookup and linear projection to get logits
     for(int t=0;t<SEQ_LEN;t++){
         uint16_t token=input_tokens[t];
         for(int d=0;d<D;d++){
             m->embed_buffer[t*D+d]= m->embedding.weight[token*D+d];
         }
+    }
+    layernorm_forward(&m->ln, m->embed_buffer, m->ln_buffer);
+    for(int t=0;t<SEQ_LEN;t++){
         for(int v=0;v<V;v++){
             float sum= m->output.b[v];
             for(int d= 0;d<D;d++){
-                sum+=m->embed_buffer[t*D+d]*m->output.W[d*V+v];;
+                sum+=m->ln_buffer[t*D+d]*m->output.W[d*V+v];;
             }
             m->logit_buffer[t*V+v]=sum;
         }
@@ -108,7 +105,7 @@ float model_backward(Model *m,
 
         float *logits = &m->logit_buffer[t * V];
 
-        /* ---- Softmax ---- */
+        // Softmax
         float max_val = logits[0];
         for (int v = 1; v < V; v++)
             if (logits[v] > max_val) max_val = logits[v];
@@ -122,15 +119,15 @@ float model_backward(Model *m,
         for (int v = 0; v < V; v++)
             logits[v] /= sum_exp;
 
-        /* ---- Cross-entropy loss ---- */
+        // Cross-entropy loss
         uint16_t target = target_tokens[t];
         float prob = logits[target];
         total_loss += -logf(prob + EPS);
 
-        /* ---- Gradient of softmax+CE ---- */
+        //Gradient of softmax+CE
         logits[target] -= 1.0f;  // dL/dz = p - y
 
-        /* ---- Backprop through linear ---- */
+        // Backprop through linear 
         for (int d = 0; d < D; d++) {
 
             float grad_embed = 0.0f;
@@ -150,7 +147,7 @@ float model_backward(Model *m,
             m->d_embed_buffer[t * D + d] = grad_embed;
         }
 
-        /* ---- Backprop to embedding ---- */
+        // Backprop to embedding 
         uint16_t token = input_tokens[t];
 
         for (int d = 0; d < D; d++) {
@@ -175,6 +172,7 @@ void model_update(Model *m, float lr) {
 
     for (int i = 0; i < V; i++)
         m->output.b[i] -= lr * m->output.grad_b[i];
+    layernorm_update(&m->ln, lr);
 }
 void model_free(Model *m) {
 
@@ -189,4 +187,6 @@ void model_free(Model *m) {
     free(m->embed_buffer);
     free(m->logit_buffer);
     free(m->d_embed_buffer);
+    free(m->ln_buffer);
+    layernorm_free(&m->ln);
 }

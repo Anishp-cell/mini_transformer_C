@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 #include "../../config/model_config.h"
+#include "../layers/layernorm.h"
+
 
 /* ============================================================
    Embedding Layer
@@ -40,11 +42,11 @@ typedef struct {
     /* Layers */
     Embedding embedding;
     Linear output;
-
+    LayerNorm ln;
     /* Forward buffers */
     float *embed_buffer;    // [SEQ_LEN * EMBED_DIM]
     float *logit_buffer;   // [SEQ_LEN * VOCAB_SIZE]
-
+    float *ln_buffer;      // output of layer norm [SEQ_LEN * EMBED_DIM]
     /* Backward buffer */
     float *d_embed_buffer;  // [SEQ_LEN * EMBED_DIM]
 
