@@ -42,6 +42,7 @@ void model_init(Model *m){
     m->logit_buffer =(float*)malloc(SEQ_LEN * V * sizeof(float));
     //    Allocate backward buffer
     m->d_embed_buffer =(float*)malloc(SEQ_LEN * D * sizeof(float));
+    m->d_ln_buffer= (float*)malloc(SEQ_LEN*EMBED_DIM*sizeof(float));
     m->ln_buffer= (float*)malloc(SEQ_LEN*D*sizeof(float));
     //    Initialize layer norm
     layernorm_init(&m->ln);
@@ -155,6 +156,8 @@ float model_backward(Model *m,
                 m->d_embed_buffer[t * D + d];
         }
     }
+    layernorm_backward(&m->ln, m->embed_buffer, m->d_ln_buffer, m->embed_buffer);
+    
 
     return total_loss / SEQ_LEN;
 }

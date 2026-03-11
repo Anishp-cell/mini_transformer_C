@@ -77,6 +77,35 @@ void layernorm_forward(LayerNorm *ln, float *input, float *output){
         }
     }
 }
+void layernorm_backward(LayerNorm *ln, float *input, float *output_grad, float *input_grad){
+    int D= ln->embed_dim;
+    for(int t=0;t<SEQ_LEN;t++){
+        //get pointers to current token's input, output and gradients
+        float *xhat= &ln->x_hat[t*D]; // normalized input from forward pass
+        float *gout= &output_grad[t*D]; // gradient from next layer w.r.t. output of this layer
+        float *gin= &input_grad[t*D]; // gradient w.r.t. input to this layer (to be computed)
+        float mean= ln->mean[t]; 
+        float var= ln->var[t]; //mean and variance from fwd pass
+        float inv_std= 1.0f / sqrt (var+1e-5f); // inverse std from fwd pass Epsilon(EPS) is 1e-5f
+        for(int d=0;d<D;d++){
+            ln->grad_gamma[d]+= gout[d];
+            ln->grad_beta[d]+= gout[d];
+        }
+        // compute g= dL/dy*gamma here g is gradient of the loss wrt normalized input xhat
+        float sum_g=0.0f;
+        float sum_g_xhat=0.0f;
+        for(int d=0;d<D;d++){
+            float g= gout[d]*ln->gamma[d];
+            sum_g+=g;
+            sum_g_xhat+= g*xhat[d];
+        }
+        //compute final gradient
+        for(int d=0;d<D;d++){
+            float g= gout[d]*ln->gamma[d];
+            gin[d]=inv_std*(g-sum_g/D - xhat[d]*sum_g_xhat/D); // dL/dx= (1/sqrt(var+EPS))*(g - mean(g) - xhat*mean(g*xhat))
+        }
+    }
+}
 void layernorm_update(LayerNorm *ln, float learning_rate){
     int D= ln->embed_dim;
     for(int d=0;d<D;d++){

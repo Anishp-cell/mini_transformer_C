@@ -22,7 +22,7 @@ void layernorm_zero_grad(LayerNorm *ln);
 // forward pass- input and output are both [SEQ_LEN * EMBED_DIM] 
 void layernorm_forward(LayerNorm *ln, float *input, float *output);
 // backward pass- input_grad is gradient from next layer and output_grad is gradient w.r.t. input to this layer
-void layernorm_backward(LayerNorm *ln, float *input_grad, float *output_grad);
+void layernorm_backward(LayerNorm *ln, float *input, float *output_grad, float *input_grad);
 void layernorm_update(LayerNorm *ln, float lr);
 void layernorm_free(LayerNorm *ln);
 #endif

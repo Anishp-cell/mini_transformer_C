@@ -49,6 +49,7 @@ typedef struct {
     float *ln_buffer;      // output of layer norm [SEQ_LEN * EMBED_DIM]
     /* Backward buffer */
     float *d_embed_buffer;  // [SEQ_LEN * EMBED_DIM]
+    float *d_ln_buffer;     // [SEQ_LEN * EMBED_DIM] 
 
 } Model;
 
