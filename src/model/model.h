@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "../../config/model_config.h"
 #include "../layers/layernorm.h"
-
+#include "../attention/attention.h"
 
 /* ============================================================
    Embedding Layer
@@ -42,15 +42,23 @@ typedef struct {
     /* Layers */
     Embedding embedding;
     Linear output;
-    LayerNorm ln;
+    LayerNorm ln1;
+    Attention attn;
+    LayerNorm ln2;
     /* Forward buffers */
     float *embed_buffer;    // [SEQ_LEN * EMBED_DIM]
     float *logit_buffer;   // [SEQ_LEN * VOCAB_SIZE]
-    float *ln_buffer;      // output of layer norm [SEQ_LEN * EMBED_DIM]
+    float *ln1_buffer;      // output of layer norm [SEQ_LEN * EMBED_DIM]
+    float *attn_buffer;     // output of attention [SEQ_LEN * EMBED_DIM]
+    float *residual_buffer; // output of attention before second layer norm [SEQ_LEN * EMBED_DIM]
+    float *ln2_buffer;      // output of layer norm [SEQ_LEN * EMBED_DIM]
     /* Backward buffer */
     float *d_embed_buffer;  // [SEQ_LEN * EMBED_DIM]
-    float *d_ln_buffer;     // [SEQ_LEN * EMBED_DIM] 
-
+    float *d_ln1_buffer;     // [SEQ_LEN * EMBED_DIM] 
+    float *d_attn_buffer; 
+    float *d_residual_buffer;
+    float *d_ln2_buffer;
+    
 } Model;
 
 /* ============================================================

@@ -88,7 +88,7 @@ void layernorm_backward(LayerNorm *ln, float *input, float *output_grad, float *
         float var= ln->var[t]; //mean and variance from fwd pass
         float inv_std= 1.0f / sqrt (var+1e-5f); // inverse std from fwd pass Epsilon(EPS) is 1e-5f
         for(int d=0;d<D;d++){
-            ln->grad_gamma[d]+= gout[d];
+            ln->grad_gamma[d]+= gout[d]*xhat[d];
             ln->grad_beta[d]+= gout[d];
         }
         // compute g= dL/dy*gamma here g is gradient of the loss wrt normalized input xhat
@@ -106,14 +106,12 @@ void layernorm_backward(LayerNorm *ln, float *input, float *output_grad, float *
         }
     }
 }
-void layernorm_update(LayerNorm *ln, float learning_rate){
-    int D= ln->embed_dim;
-    for(int d=0;d<D;d++){
-        int D= ln->embed_dim;
-        for(int d= 0;d<D;d++){
-            ln->gamma[d]-= learning_rate * ln->grad_gamma[d];
-            ln->beta[d]-= learning_rate * ln->grad_beta[d];
-        }
+void layernorm_update(LayerNorm *ln, float lr){
+    int D = ln->embed_dim;
+
+    for(int d=0; d<D; d++){
+        ln->gamma[d] -= lr * ln->grad_gamma[d];
+        ln->beta[d]  -= lr * ln->grad_beta[d];
     }
 }
 void layernorm_free(LayerNorm *ln) {

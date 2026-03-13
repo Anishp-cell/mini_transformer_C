@@ -5,6 +5,7 @@
 #include <string.h>
 #include "model.h"
 #include "../layers/layernorm.h"
+#include "../attention/attention.h"
 
 // box muller transform for normal distribution sampling
 static float ran_normal(){
@@ -40,12 +41,24 @@ void model_init(Model *m){
 
     m->embed_buffer =(float*)malloc(SEQ_LEN * D * sizeof(float));
     m->logit_buffer =(float*)malloc(SEQ_LEN * V * sizeof(float));
+    
+    m->ln1_buffer= (float*)malloc(SEQ_LEN*D*sizeof(float));
+    m->attn_buffer= (float*)malloc(SEQ_LEN*D*sizeof(float));
+    m->residual_buffer= (float*)malloc(SEQ_LEN*D*sizeof(float));
+    m->ln2_buffer= (float*)malloc(SEQ_LEN*D*sizeof(float));
+    
     //    Allocate backward buffer
     m->d_embed_buffer =(float*)malloc(SEQ_LEN * D * sizeof(float));
-    m->d_ln_buffer= (float*)malloc(SEQ_LEN*EMBED_DIM*sizeof(float));
-    m->ln_buffer= (float*)malloc(SEQ_LEN*D*sizeof(float));
+    m->d_ln1_buffer= (float*)malloc(SEQ_LEN*EMBED_DIM*sizeof(float));
+    m->d_attn_buffer= (float*)malloc(SEQ_LEN*EMBED_DIM*sizeof(float));
+    m->d_residual_buffer= (float*)malloc(SEQ_LEN*EMBED_DIM*sizeof(float));
+    m->d_ln2_buffer= (float*)malloc(SEQ_LEN*EMBED_DIM*sizeof(float));
+
     //    Initialize layer norm
-    layernorm_init(&m->ln);
+    layernorm_init(&m->ln1);
+    m->attn.embed_dim=D;
+    attention_init(&m->attn);
+    layernorm_init(&m->ln2);
     //    Initialize weights
     for(int i = 0; i < V * D; i++)
         m->embedding.weight[i] = ran_normal() * INIT_STD;
@@ -65,7 +78,10 @@ void model_init(Model *m){
         memset(m->embedding.grad_weight,0,V*D*sizeof(float));
         memset(m->output.grad_W,0,D*V*sizeof(float));
         memset(m->output.grad_b,0,V*sizeof(float));
-        layernorm_zero_grad(&m->ln);
+        layernorm_zero_grad(&m->ln1);
+        layernorm_zero_grad(&m->ln2);
+        attention_zero_grad(&m->attn);
+
     }
 //forward pass
 void model_forward(Model *m, uint16_t *input_tokens){
@@ -78,17 +94,23 @@ void model_forward(Model *m, uint16_t *input_tokens){
             m->embed_buffer[t*D+d]= m->embedding.weight[token*D+d];
         }
     }
-    layernorm_forward(&m->ln, m->embed_buffer, m->ln_buffer);
+    layernorm_forward(&m->ln1, m->embed_buffer, m->ln1_buffer);
+    attention_forward(&m->attn, m->ln1_buffer, m->attn_buffer);
+    // residual connection before second layer norm
+    for(int i = 0; i < SEQ_LEN * D; i++)    {
+        m->residual_buffer[i] = m->embed_buffer[i]+m->attn_buffer[i];
+    }
+    layernorm_forward(&m->ln2, m->residual_buffer, m->ln2_buffer);
     for(int t=0;t<SEQ_LEN;t++){
         for(int v=0;v<V;v++){
             float sum= m->output.b[v];
             for(int d= 0;d<D;d++){
-                sum+=m->ln_buffer[t*D+d]*m->output.W[d*V+v];;
+                sum+=m->ln2_buffer[t*D+d]*m->output.W[d*V+v];;
             }
             m->logit_buffer[t*V+v]=sum;
         }
     }
-}
+}  
 //backward pass
 float model_backward(Model *m,
                      uint16_t *input_tokens,
@@ -156,7 +178,7 @@ float model_backward(Model *m,
                 m->d_embed_buffer[t * D + d];
         }
     }
-    layernorm_backward(&m->ln, m->embed_buffer, m->d_ln_buffer, m->embed_buffer);
+    layernorm_backward(&m->ln2, m->residual_buffer, m->d_ln2_buffer, m->d_residual_buffer);
     
 
     return total_loss / SEQ_LEN;
@@ -175,7 +197,10 @@ void model_update(Model *m, float lr) {
 
     for (int i = 0; i < V; i++)
         m->output.b[i] -= lr * m->output.grad_b[i];
-    layernorm_update(&m->ln, lr);
+    attention_update(&m->attn, lr);
+    layernorm_update(&m->ln1, lr);
+    layernorm_update(&m->ln2, lr);
+
 }
 void model_free(Model *m) {
 
@@ -190,6 +215,15 @@ void model_free(Model *m) {
     free(m->embed_buffer);
     free(m->logit_buffer);
     free(m->d_embed_buffer);
-    free(m->ln_buffer);
-    layernorm_free(&m->ln);
+    free(m->ln1_buffer);
+    free(m->attn_buffer);
+    free(m->residual_buffer);
+    free(m->ln2_buffer);
+    attention_free(&m->attn);
+    layernorm_free(&m->ln1);
+    layernorm_free(&m->ln2);
+    free(m->d_ln1_buffer);
+    free(m->d_ln2_buffer);
+    free(m->d_attn_buffer);
+    free(m->d_residual_buffer);
 }
