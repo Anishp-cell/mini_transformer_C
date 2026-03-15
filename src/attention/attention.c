@@ -111,6 +111,76 @@ void attention_forward(Attention *attn, float *input, float *output){
         }
     }
 }
+void attention_backward(Attention *attn, float *input, float *d_output, float *d_input){
+    int D= attn->embed_dim;
+    float scale= 1.0f/sqrt((float)D);
+    float *dQ= (float*)calloc(SEQ_LEN*D, sizeof(float));
+    float *dK= (float*)calloc(SEQ_LEN*D, sizeof(float));
+    float *dV= (float*)calloc(SEQ_LEN*D, sizeof(float));
+    float *dA= (float*)calloc(SEQ_LEN*SEQ_LEN, sizeof(float));  //attention weight gradient
+    float *dS= (float*)calloc(SEQ_LEN*SEQ_LEN, sizeof(float));  //score gradient
+    
+    for(int i=0;i<SEQ_LEN;i++){
+        for(int j=0;j<SEQ_LEN;j++){
+            float grad= 0.0f;
+            for(int d=0;d<D;d++){
+                grad+= d_output[i*D+d]*attn->V[j*D+d]; // gradient of output w.r.t attention weights
+                dV[j*D+d]+= attn->weights[i*SEQ_LEN+j]*d_output[i*D+d]; // gradient of output w.r.t value vectors
+            }
+            dA[i*SEQ_LEN+j]= grad; // store attention weight gradient
+        }
+    }
+    // softmax backward to get score gradients
+    for(int i=0;i<SEQ_LEN;i++){
+        float sum= 0.0f;
+        for(int j=0;j<SEQ_LEN;j++){
+            sum+= attn->weights[i*SEQ_LEN+j]*dA[i*SEQ_LEN+j]; // sum_k weights[i][k]*dA[i][k]
+        }
+        for(int j=0;j<SEQ_LEN;j++){
+            float w= attn->weights[i*SEQ_LEN+j];
+            dS[i*SEQ_LEN+j]=w*(dA[i*SEQ_LEN+j]-sum); // gradient of score = weight * (dA - sum_k weights[i][k]*dA[i][k])
+        }
+    }
+    for(int i=0;i<SEQ_LEN;i++){
+        for(int j=0;j<SEQ_LEN;j++){
+            float grad= dS[i*SEQ_LEN+j]*scale; // scale the score gradient
+        
+            for(int d=0;d<D;d++){
+                dQ[i*D+d]+= grad*attn->K[j*D+d]; // gradient of score w.r.t query vector
+                dK[j*D+d]+= grad*attn->Q[i*D+d]; // gradient of score w.r.t key vector
+            }
+        }
+    }
+    //compute gradients wrt projection weights Wq, Wk, Wv
+    for(int t=0;t<SEQ_LEN;t++){
+        for(int d=0;d<D;d++){
+            float x= input[t*D+d]; // input token dimension
+            for(int k= 0; k<D;k++){
+                attn->grad_Wq[d*D+k]+= x*dQ[t*D+k]; // gradient of Wq
+                attn->grad_Wk[d*D+k]+= x*dK[t*D+k]; // gradient of Wk
+                attn->grad_Wv[d*D+k]+= x*dV[t*D+k]; // gradient of Wv
+
+            }
+        }
+    }
+    //compute gradient wrt input by backpropagating through the projection layers
+    for(int t=0;t<SEQ_LEN;t++){
+        for(int d=0;d<D;d++){
+            float grad= 0.0f;
+            for(int k=0;k<D;k++){
+                grad+= dQ[t*D+k]*attn->Wq[d*D+k]; // gradient from query projection
+                grad+= dK[t*D+k]*attn->Wk[d*D+k]; // gradient from key projection
+                grad+= dV[t*D+k]*attn->Wv[d*D+k]; // gradient from value projection
+            }
+            d_input[t*D+d]= grad; // store input gradient
+        }
+    }  
+    free(dQ);
+    free(dK);
+    free(dV);
+    free(dA);
+    free(dS);
+}
 void attention_update(Attention *attn, float lr){
     int D= attn->embed_dim;
     for(int i=0;i<D*D;i++){

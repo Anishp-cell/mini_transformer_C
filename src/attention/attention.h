@@ -30,7 +30,7 @@ void attention_zero_grad(Attention *attn);
 
 void attention_forward(Attention *attn, float *input, float *output);
 
-void attention_backward(Attention *attn, float *input, float *grad_output, float *grad_input);
+void attention_backward(Attention *attn, float *input, float *d_output, float *d_input);
 
 void attention_update(Attention *attn, float lr);
 

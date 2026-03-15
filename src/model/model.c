@@ -179,6 +179,7 @@ float model_backward(Model *m,
         }
     }
     layernorm_backward(&m->ln2, m->residual_buffer, m->d_ln2_buffer, m->d_residual_buffer);
+    attention_backward(&m->attn, m->ln1_buffer, m->d_residual_buffer, m->d_ln1_buffer);
     
 
     return total_loss / SEQ_LEN;
