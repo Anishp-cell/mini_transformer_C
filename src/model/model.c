@@ -6,6 +6,7 @@
 #include "model.h"
 #include "../layers/layernorm.h"
 #include "../attention/attention.h"
+#include "../layers/feedforward.h"
 
 // box muller transform for normal distribution sampling
 static float ran_normal(){
@@ -69,6 +70,9 @@ void model_init(Model *m){
     for(int i = 0; i < V; i++)
         m->output.b[i] = 0.0f;
 
+    feedforward_init(&m->ff);
+    m->ff_buffer = malloc(SEQ_LEN * D * sizeof(float));
+    m->d_ff_buffer = malloc(SEQ_LEN * D * sizeof(float));
     printf("Model initialized.\n");
 }
 // zero out gradients before backprop
@@ -110,6 +114,11 @@ void model_forward(Model *m, uint16_t *input_tokens){
             m->logit_buffer[t*V+v]=sum;
         }
     }
+    feedforward_forward(&m->ff,m->ln2_buffer,m->ff_buffer);
+    for(int i=0;i<SEQ_LEN*D;i++){
+        m->ff_buffer[i] += m->residual_buffer[i];
+    }
+    
 }  
 //backward pass
 float model_backward(Model *m,
@@ -180,8 +189,7 @@ float model_backward(Model *m,
     }
     layernorm_backward(&m->ln2, m->residual_buffer, m->d_ln2_buffer, m->d_residual_buffer);
     attention_backward(&m->attn, m->ln1_buffer, m->d_residual_buffer, m->d_ln1_buffer);
-    
-
+    feedforward_backward(&m->ff,m->ln2_buffer,m->d_residual_buffer,m->d_ln2_buffer);
     return total_loss / SEQ_LEN;
 }
 
@@ -201,6 +209,7 @@ void model_update(Model *m, float lr) {
     attention_update(&m->attn, lr);
     layernorm_update(&m->ln1, lr);
     layernorm_update(&m->ln2, lr);
+    feedforward_update(&m->ff, lr);
 
 }
 void model_free(Model *m) {

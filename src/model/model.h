@@ -5,6 +5,7 @@
 #include "../../config/model_config.h"
 #include "../layers/layernorm.h"
 #include "../attention/attention.h"
+#include "../layers/feedforward.h"
 
 /* ============================================================
    Embedding Layer
@@ -58,6 +59,9 @@ typedef struct {
     float *d_attn_buffer; 
     float *d_residual_buffer;
     float *d_ln2_buffer;
+    FeedForward ff;
+   float *ff_buffer;
+   float *d_ff_buffer;
     
 } Model;
 
@@ -75,5 +79,6 @@ float model_backward(Model *m,
 
 void model_update(Model *m, float lr);
 void model_free(Model *m);
+
 
 #endif
