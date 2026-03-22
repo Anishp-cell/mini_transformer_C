@@ -15,7 +15,7 @@ void layernorm_init(LayerNorm *ln){
     ln->var= (float*)malloc(SEQ_LEN*sizeof(float));
     ln->x_hat= (float*)malloc(SEQ_LEN*D*sizeof(float));
     for(int d=0; d<D;d++){
-        ln->gamma[d]=0.1f;
+        ln->gamma[d]=1.0;
         ln->beta[d]=0.0f;
     }
     printf("layerNorm initialized\n");

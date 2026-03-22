@@ -31,8 +31,8 @@ void attention_init(Attention *attn){
     attn->V= (float*)malloc(SEQ_LEN*D*sizeof(float));
 
     attn->scores= (float*)malloc(SEQ_LEN * SEQ_LEN *sizeof(float));
-    attn->weights= (float*)malloc(SEQ_LEN * SEQ_LEN * sizeof(float));
-    attn->output= (float*)malloc(SEQ_LEN*D*sizeof(float));
+    attn->weights = (float*)malloc(SEQ_LEN * SEQ_LEN * sizeof(float));
+    attn->output  = (float*)malloc(SEQ_LEN * D * sizeof(float));
     // initialize weights
     for(int i=0;i<D*D;i++){
         attn->Wq[i]= rand_normal()*INIT_STD;
