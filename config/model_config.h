@@ -16,7 +16,7 @@
 /* ================================
    Training Hyperparameters
 ================================ */
-#define LEARNING_RATE 0.001f
+#define LEARNING_RATE 0.0003f
 #define TRAIN_STEPS 2000      // Total update steps
 #define PRINT_EVERY 100       // Print loss every N steps
 

@@ -1,12 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #define _USE_MATH_DEFINES
 #include <math.h>
-#include <string.h>
 #include "model.h"
-#include "../layers/layernorm.h"
-#include "../attention/attention.h"
-#include "../layers/feedforward.h"
 
 // box muller transform for normal distribution sampling
 static float ran_normal(){
@@ -20,312 +17,230 @@ static float ran_normal(){
 void model_init(Model *m){
 
     m->vocab_size = VOCAB_SIZE;
-    m->embed_dim  = EMBED_DIM;
-
-    int V = m->vocab_size;
-    int D = m->embed_dim;
-
-    //    Allocate embedding
-
-    m->embedding.weight = (float*)malloc(V * D * sizeof(float));
-    m->embedding.grad_weight = (float*)malloc(V * D * sizeof(float));
-
-  
-    //    Allocate output layer
-  
-    m->output.W = (float*)malloc(D * V * sizeof(float));
-    m->output.b = (float*)malloc(V * sizeof(float));
-    m->output.grad_W = (float*)malloc(D * V * sizeof(float));
-    m->output.grad_b = (float*)malloc(V * sizeof(float));
-
-    //    Allocate forward buffers
-
-    m->embed_buffer =(float*)malloc(SEQ_LEN * D * sizeof(float));
-    m->logit_buffer =(float*)malloc(SEQ_LEN * V * sizeof(float));
-    
-    m->ln1_buffer= (float*)malloc(SEQ_LEN*D*sizeof(float));
-    m->attn_buffer= (float*)malloc(SEQ_LEN*D*sizeof(float));
-    m->residual_buffer= (float*)malloc(SEQ_LEN*D*sizeof(float));
-    m->ln2_buffer= (float*)malloc(SEQ_LEN*D*sizeof(float));
-    
-    //    Allocate backward buffer
-    m->d_embed_buffer =(float*)malloc(SEQ_LEN * D * sizeof(float));
-    m->d_ln1_buffer= (float*)malloc(SEQ_LEN*EMBED_DIM*sizeof(float));
-    m->d_attn_buffer= (float*)malloc(SEQ_LEN*EMBED_DIM*sizeof(float));
-    m->d_residual_buffer= (float*)malloc(SEQ_LEN*EMBED_DIM*sizeof(float));
-    m->d_ln2_buffer= (float*)malloc(SEQ_LEN*EMBED_DIM*sizeof(float));
-
-    //    Initialize layer norm
-    layernorm_init(&m->ln1);
-    m->attn.embed_dim=D;
-    attention_init(&m->attn);
-    layernorm_init(&m->ln2);
-    //    Initialize weights
-    for(int i = 0; i < V * D; i++)
-        m->embedding.weight[i] = ran_normal() * INIT_STD;
-
-    for(int i = 0; i < D * V; i++)
-        m->output.W[i] = ran_normal() * INIT_STD;
-
-    for(int i = 0; i < V; i++)
-        m->output.b[i] = 0.0f;
-
-    feedforward_init(&m->ff);
-    m->ff_buffer = malloc(SEQ_LEN * D * sizeof(float));
-    m->d_ff_buffer = malloc(SEQ_LEN * D * sizeof(float));
+    m->embed_dim=EMBED_DIM;
+    m->num_layers=3;
+    int V= VOCAB_SIZE;
+    int D= EMBED_DIM;
+    //set embeddings
+    m->token_embedding= (float*)malloc(V*D*sizeof(float));
+    m->pos_embedding=(float*)malloc(SEQ_LEN*D*sizeof(float));
+    m->embed_buffer=(float*)malloc(SEQ_LEN*D*sizeof(float));
+    for(int i=0;i<V*D;i++)
+        m->token_embedding[i]=ran_normal()*INIT_STD;
+    for(int i=0;i<SEQ_LEN;i++){
+        m->pos_embedding[i]=ran_normal()*INIT_STD;
+    }
+    //initializing number of layers
+    m->blocks= (TransformerBlock*)malloc(m->num_layers*sizeof(TransformerBlock));
+    for(int i=0;i<m->num_layers;i++)
+        transformer_block_init(&m->blocks[i]);
+    m->block_buffer=malloc(SEQ_LEN*D*sizeof(float));
+    m->next_block_buffer=malloc(SEQ_LEN*D*sizeof(float));
+    layernorm_init(&m->final_ln);
+    m->ln_out=malloc(SEQ_LEN*D*sizeof(float));
+    m->W_out=malloc(D*V*sizeof(float));
+    m->b_out=malloc(V*sizeof(float));
+    m->grad_W_out=malloc(D*V*sizeof(float));
+    m->grad_b_out=malloc(V*sizeof(float));
+    for(int i=0;i<D*V;i++)
+        m->W_out[i]=ran_normal()*INIT_STD;
+    for(int i=0;i<V;i++){
+        m->b_out[i]=0.0f;
+    }
+    m->logits=malloc(SEQ_LEN*V*sizeof(float));
+    m->d_logits=malloc(SEQ_LEN*V*sizeof(float));
+    m->d_block=malloc(SEQ_LEN*D*sizeof(float));
     printf("Model initialized.\n");
 }
 // zero out gradients before backprop
     void model_zero_grad(Model *m){
-        int V= m->vocab_size;
-        int D= m->embed_dim;
-        memset(m->embedding.grad_weight,0,V*D*sizeof(float));
-        memset(m->output.grad_W,0,D*V*sizeof(float));
-        memset(m->output.grad_b,0,V*sizeof(float));
-        layernorm_zero_grad(&m->ln1);
-        layernorm_zero_grad(&m->ln2);
-        attention_zero_grad(&m->attn);
-        feedforward_zero_grad(&m->ff);
-
+        memset(m->grad_W_out,0,EMBED_DIM*VOCAB_SIZE*sizeof(float));
+        memset(m->grad_b_out,0,VOCAB_SIZE*sizeof(float));
+        for(int i=0;i<m->num_layers;i++){
+            transformer_block_zero_grad(&m->final_ln);
+        }
+        layernorm_zero_grad(&m->final_ln);
     }
 //forward pass
-void model_forward(Model *m, uint16_t *input_tokens){
+void model_forward(Model *m, uint16_t *input){
     int V= m->vocab_size;
     int D= m->embed_dim;
-    //embedding lookup and linear projection to get logits
+    //embedding and position embedding
     for(int t=0;t<SEQ_LEN;t++){
-        uint16_t token=input_tokens[t];
+        uint16_t token=input[t];
         for(int d=0;d<D;d++){
-            m->embed_buffer[t*D+d]= m->embedding.weight[token*D+d];
+           float tok=m->token_embedding[token*D+d];
+           float pos=m->pos_embedding[t*D+d];
+           m->embed_buffer[t*D+d]=tok+pos;
         }
     }
-    layernorm_forward(&m->ln1, m->embed_buffer, m->ln1_buffer); //ln1
-    attention_forward(&m->attn, m->ln1_buffer, m->attn_buffer); //attention
-    // residual connection before second layer norm (residual 1)
-    for(int i = 0; i < SEQ_LEN * D; i++)    {
-        m->residual_buffer[i] = m->embed_buffer[i]+m->attn_buffer[i];
+    memcpy(m->block_buffer,m->embed_buffer,SEQ_LEN*D*sizeof(float));
+    for(int i=0;i<m->num_layers;i++){
+        transformer_block_forward(&m->blocks[i],m->block_buffer, m->next_block_buffer);
+         float *tmp = m->block_buffer;
+        m->block_buffer = m->next_block_buffer;
+        m->next_block_buffer = tmp;
     }
-    layernorm_forward(&m->ln2, m->residual_buffer, m->ln2_buffer); //ln2
-    feedforward_forward(&m->ff,m->ln2_buffer,m->ff_buffer);//feedforward
-    for(int i=0;i<SEQ_LEN*D;i++){  //residual 2
-        m->ff_buffer[i] += m->residual_buffer[i];
-    }
-    for(int t=0;t<SEQ_LEN;t++){  //linear
+   layernorm_forward(&m->final_ln, m->block_buffer, m->ln_out);
+
+    /* ---- Output ---- */
+    for(int t=0;t<SEQ_LEN;t++){
         for(int v=0;v<V;v++){
-            float sum= m->output.b[v];
-            for(int d= 0;d<D;d++){
-                sum += m->ff_buffer[t*D+d] * m->output.W[d*V+v];
+
+            float sum = m->b_out[v];
+
+            for(int d=0;d<D;d++){
+                sum += m->ln_out[t*D+d] * m->W_out[d*V+v];
             }
-            m->logit_buffer[t*V+v]=sum;
+
+            m->logits[t*V+v] = sum;
         }
     }
-}  
-//backward pass
+}
+
+/* =========================
+   BACKWARD
+========================= */
 float model_backward(Model *m,
-                     uint16_t *input_tokens,
-                     uint16_t *target_tokens) {
+                     uint16_t *input,
+                     uint16_t *target){
 
     int V = m->vocab_size;
     int D = m->embed_dim;
 
-    float total_loss = 0.0f;
+    float loss = 0.0f;
 
-    /* Zero d_embed buffer */
-    memset(m->d_embed_buffer, 0, SEQ_LEN * D * sizeof(float));
-    memset(m->d_ff_buffer, 0, SEQ_LEN * D * sizeof(float));
-    memset(m->d_residual_buffer, 0, SEQ_LEN * D * sizeof(float));
-    memset(m->d_ln2_buffer, 0, SEQ_LEN * D * sizeof(float));
-    memset(m->d_ln1_buffer, 0, SEQ_LEN * D * sizeof(float));
+    memset(m->d_block, 0, SEQ_LEN*D*sizeof(float));
 
-    for (int t = 0; t < SEQ_LEN; t++) {
+    /* ---- Softmax + CE ---- */
+    for(int t=0;t<SEQ_LEN;t++){
 
-        float *logits = &m->logit_buffer[t * V];
+        float *logits = &m->logits[t*V];
 
-        // Softmax
         float max_val = logits[0];
-        for (int v = 1; v < V; v++)
-            if (logits[v] > max_val) max_val = logits[v];
+        for(int v=1;v<V;v++)
+            if(logits[v] > max_val) max_val = logits[v];
 
-        float sum_exp = 0.0f;
-        for (int v = 0; v < V; v++) {
+        float sum = 0.0f;
+        for(int v=0;v<V;v++){
             float val = logits[v] - max_val;
-            if(val > 20.0f) val = 20.0f;
-            if(val < -20.0f) val = -20.0f;
+            if(val > 20) val = 20;
+            if(val < -20) val = -20;
+
             logits[v] = expf(val);
-            sum_exp += logits[v];
+            sum += logits[v];
         }
-        if(sum_exp < 1e-9f) sum_exp = 1e-9f; 
-        for (int v = 0; v < V; v++)
-            logits[v] /= sum_exp;
 
-        // Cross-entropy loss
-        uint16_t target = target_tokens[t];
-        float prob = logits[target];
-        // if(prob < 1e-9f) prob = 1e-9f;
-        total_loss += -logf(prob + EPS);
+        for(int v=0;v<V;v++)
+            logits[v] /= sum;
 
-        //Gradient of softmax+CE
-        logits[target] -= 1.0f;  // dL/dz = p - y
+        int y = target[t];
+        float p = logits[y];
+        if(p < 1e-9f) p = 1e-9f;
 
-        // Backprop through linear 
-        for (int d = 0; d < D; d++) {
+        loss += -logf(p);
 
-            float grad_embed = 0.0f;
+        logits[y] -= 1.0f;
 
-            for (int v = 0; v < V; v++) {
+        /* ---- Output layer backward ---- */
+        for(int d=0;d<D;d++){
 
+            float grad = 0.0f;
+
+            for(int v=0;v<V;v++){
                 float dz = logits[v];
 
-                m->output.grad_W[d * V + v] +=
-                // m->embed_buffer[t * D + d] * dz;
-                m->ff_buffer[t * D + d] * dz;
-                m->output.grad_b[v] += dz;
+                m->grad_W_out[d*V+v] +=
+                    m->ln_out[t*D+d] * dz;
 
-                grad_embed += dz * m->output.W[d * V + v];
+                m->grad_b_out[v] += dz;
+
+                grad += dz * m->W_out[d*V+v];
             }
 
-            // m->d_embed_buffer[t * D + d] = grad_embed;
-            m->d_residual_buffer[t * D + d] = grad_embed;
+            m->d_block[t*D + d] += grad;
         }
     }
-    /* ── Residual-2 Split ─────────────────────────────────────────────────
-       The FORWARD pass did:  ff_buffer[i] += residual_buffer[i]
-       That addition has TWO input branches, so the gradient fans out equally
-       to both branches (chain rule: d(a+b)/da = 1, d(a+b)/db = 1).
 
-       Branch A (FF path):   grad → copy into d_ff_buffer → LN2 → FFN
-       Branch B (identity):  grad stays in d_residual_buffer untouched
-                             and will be merged back after FFN backward.    */
-    for(int i = 0; i < SEQ_LEN * D; i++){
-        /* Give the FF branch its own independent copy of the upstream gradient.
-           We use d_ff_buffer as scratch so Branch B (d_residual_buffer) is
-           preserved unchanged for the identity path merge later.            */
-        m->d_ff_buffer[i] = m->d_residual_buffer[i];
+    /* ---- Final LN backward ---- */
+    layernorm_backward(
+        &m->final_ln,
+        m->block_buffer,
+        m->d_block,
+        m->d_block
+    );
+
+    /* ---- Blocks backward (reverse) ---- */
+    for(int i=m->num_layers-1;i>=0;i--){
+
+        transformer_block_backward(
+            &m->blocks[i],
+            (i==0) ? m->embed_buffer : m->blocks[i-1].ff_out,
+            m->d_block,
+            m->d_block
+        );
     }
 
-    /* ── LN2 Backward ─────────────────────────────────────────────────────
-       FORWARD:  ln2_buffer  = LN2(residual_buffer)
-       BACKWARD: upstream gradient = d_ff_buffer  (the FF branch copy)
-                 output gradient   = d_ln2_buffer  (what FFN will consume)  */
-    layernorm_backward(&m->ln2, m->residual_buffer, m->d_ff_buffer, m->d_ln2_buffer);
+    /* ---- Embedding gradients ---- */
+    for(int t=0;t<SEQ_LEN;t++){
+        int token = input[t];
 
-    /* ── FFN Backward ──────────────────────────────────────────────────────
-       FORWARD:  ff_buffer = FFN(ln2_buffer)
-       BACKWARD: upstream gradient = d_ln2_buffer (output of LN2 backward)
-                 output gradient   = d_ff_buffer  (reused as scratch;
-                                     holds dL/d_ln2_input for the merge)    */
-    feedforward_backward(&m->ff, m->ln2_buffer, m->d_ln2_buffer, m->d_ff_buffer);
-    for(int i = 0; i < SEQ_LEN * D; i++){
-        m->d_residual_buffer[i] += m->d_ff_buffer[i];   // merge FF branch gradient back
-    }
-    attention_backward(&m->attn, m->ln1_buffer, m->d_residual_buffer, m->d_ln1_buffer);
-    for(int i=0;i<SEQ_LEN*D;i++){
-        m->d_embed_buffer[i] += m->d_residual_buffer[i];
-    }
-    layernorm_backward(&m->ln1,m->embed_buffer,m->d_ln1_buffer, m->d_embed_buffer);
-    for (int t = 0; t < SEQ_LEN; t++) {
-        uint16_t token = input_tokens[t];
-        for (int d = 0; d < D; d++) {
-            m->embedding.grad_weight[token * D + d] +=
-            m->d_embed_buffer[t * D + d];
+        for(int d=0;d<D;d++){
+            m->token_embedding[token*D+d] -=
+                LEARNING_RATE * m->d_block[t*D+d];
         }
     }
-    return total_loss / SEQ_LEN;
+
+    return loss / SEQ_LEN;
 }
 
-void model_update(Model *m, float lr) {
+/* =========================
+   UPDATE
+========================= */
+void model_update(Model *m, float lr){
 
     int V = m->vocab_size;
     int D = m->embed_dim;
-    int F = m->ff.ff_dim;
-    float clip = 1.0f;
 
-    /* ── Helper macro to clip a single value ── */
-    #define CLIP(x) ((x) > clip ? clip : ((x) < -clip ? -clip : (x)))
+    for(int i=0;i<D*V;i++)
+        m->W_out[i] -= lr * m->grad_W_out[i];
 
-    /* Embedding */
-    for(int i = 0; i < V * D; i++){
-        m->embedding.grad_weight[i] = CLIP(m->embedding.grad_weight[i]);
-        m->embedding.weight[i] -= lr * m->embedding.grad_weight[i];
-    }
+    for(int i=0;i<V;i++)
+        m->b_out[i] -= lr * m->grad_b_out[i];
 
-    /* Output linear */
-    for(int i = 0; i < D * V; i++){
-        m->output.grad_W[i] = CLIP(m->output.grad_W[i]);
-        m->output.W[i] -= lr * m->output.grad_W[i];
-    }
-    for(int i = 0; i < V; i++){
-        m->output.grad_b[i] = CLIP(m->output.grad_b[i]);
-        m->output.b[i] -= lr * m->output.grad_b[i];
-    }
+    for(int i=0;i<m->num_layers;i++)
+        transformer_block_update(&m->blocks[i], lr);
 
-    /* Attention Wq, Wk, Wv */
-    for(int i = 0; i < D * D; i++){
-        m->attn.grad_Wq[i] = CLIP(m->attn.grad_Wq[i]);
-        m->attn.grad_Wk[i] = CLIP(m->attn.grad_Wk[i]);
-        m->attn.grad_Wv[i] = CLIP(m->attn.grad_Wv[i]);
-        m->attn.Wq[i] -= lr * m->attn.grad_Wq[i];
-        m->attn.Wk[i] -= lr * m->attn.grad_Wk[i];
-        m->attn.Wv[i] -= lr * m->attn.grad_Wv[i];
-    }
-
-    /* LayerNorm 1 */
-    for(int i = 0; i < D; i++){
-        m->ln1.grad_gamma[i] = CLIP(m->ln1.grad_gamma[i]);
-        m->ln1.grad_beta[i]  = CLIP(m->ln1.grad_beta[i]);
-        m->ln1.gamma[i] -= lr * m->ln1.grad_gamma[i];
-        m->ln1.beta[i]  -= lr * m->ln1.grad_beta[i];
-    }
-
-    /* LayerNorm 2 */
-    for(int i = 0; i < D; i++){
-        m->ln2.grad_gamma[i] = CLIP(m->ln2.grad_gamma[i]);
-        m->ln2.grad_beta[i]  = CLIP(m->ln2.grad_beta[i]);
-        m->ln2.gamma[i] -= lr * m->ln2.grad_gamma[i];
-        m->ln2.beta[i]  -= lr * m->ln2.grad_beta[i];
-    }
-
-    /* FeedForward W1, b1, W2, b2 */
-    for(int i = 0; i < D * F; i++){
-        m->ff.grad_W1[i] = CLIP(m->ff.grad_W1[i]);
-        m->ff.grad_W2[i] = CLIP(m->ff.grad_W2[i]);
-        m->ff.W1[i] -= lr * m->ff.grad_W1[i];
-        m->ff.W2[i] -= lr * m->ff.grad_W2[i];
-    }
-    for(int i = 0; i < F; i++){
-        m->ff.grad_b1[i] = CLIP(m->ff.grad_b1[i]);
-        m->ff.b1[i] -= lr * m->ff.grad_b1[i];
-    }
-    for(int i = 0; i < D; i++){
-        m->ff.grad_b2[i] = CLIP(m->ff.grad_b2[i]);
-        m->ff.b2[i] -= lr * m->ff.grad_b2[i];
-    }
-
-    #undef CLIP
+    layernorm_update(&m->final_ln, lr);
 }
 
-void model_free(Model *m) {
+/* =========================
+   FREE
+========================= */
+void model_free(Model *m){
 
-    free(m->embedding.weight);
-    free(m->embedding.grad_weight);
-
-    free(m->output.W);
-    free(m->output.b);
-    free(m->output.grad_W);
-    free(m->output.grad_b);
-
+    free(m->token_embedding);
+    free(m->pos_embedding);
     free(m->embed_buffer);
-    free(m->logit_buffer);
-    free(m->d_embed_buffer);
-    free(m->ln1_buffer);
-    free(m->attn_buffer);
-    free(m->residual_buffer);
-    free(m->ln2_buffer);
-    attention_free(&m->attn);
-    layernorm_free(&m->ln1);
-    layernorm_free(&m->ln2);
-    free(m->d_ln1_buffer);
-    free(m->d_ln2_buffer);
-    free(m->d_attn_buffer);
-    free(m->d_residual_buffer);
+
+    free(m->block_buffer);
+    free(m->next_block_buffer);
+
+    for(int i=0;i<m->num_layers;i++)
+        transformer_block_free(&m->blocks[i]);
+
+    free(m->blocks);
+
+    free(m->W_out);
+    free(m->b_out);
+    free(m->grad_W_out);
+    free(m->grad_b_out);
+
+    free(m->logits);
+    free(m->d_logits);
+    free(m->d_block);
+
+    free(m->ln_out);
+
+    layernorm_free(&m->final_ln);
 }
