@@ -57,7 +57,7 @@ void model_init(Model *m){
         memset(m->grad_W_out,0,EMBED_DIM*VOCAB_SIZE*sizeof(float));
         memset(m->grad_b_out,0,VOCAB_SIZE*sizeof(float));
         for(int i=0;i<m->num_layers;i++){
-            transformer_block_zero_grad(&m->final_ln);
+            layernorm_zero_grad(&m->final_ln);
         }
         layernorm_zero_grad(&m->final_ln);
     }

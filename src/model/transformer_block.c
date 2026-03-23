@@ -21,7 +21,7 @@ void transformer_block_init(TransformerBlock *tb){
     tb->d_residual1=malloc(SEQ_LEN*D*sizeof(float));
     tb->d_ln2=malloc(SEQ_LEN*D*sizeof(float));
     tb->d_ff=malloc(SEQ_LEN*D*sizeof(float));
-    pritnf("transformer block initialized");
+    printf("transformer block initialized");
 }
 void transformer_block_zero_grad(TransformerBlock *tb){
     layernorm_zero_grad(&tb->ln1);
@@ -56,7 +56,7 @@ void transformer_block_backward(TransformerBlock *tb, float *input, float *d_out
         tb->d_ff[i]+=d_output[i];
     }
     feedforward_backward(&tb->ff, tb->ln2_out,tb->d_ff, tb->d_ln2);
-    layernorm_backward(&tb->d_ln2, tb->residual1, tb->d_ln2, tb->d_residual1);
+    layernorm_backward(&tb->ln2, tb->residual1, tb->d_ln2, tb->d_residual1);
     //residual 1 split
     for(int i=9;i<SEQ_LEN; i++){
         d_input[i]+=tb->d_residual1[i];
