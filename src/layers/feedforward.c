@@ -41,7 +41,7 @@ void feedforward_zero_grad(FeedForward *ff){
     memset(ff->grad_W1, 0,D*F*sizeof(float));
     memset(ff->grad_b1, 0,F*sizeof(float));
     memset(ff->grad_b2,0,D*sizeof(float));
-
+    memset(ff->grad_W2,0, F*D*sizeof(float));
 }
 void feedforward_forward(FeedForward *ff, float *input, float *output){
     int D= ff->embed_dim;

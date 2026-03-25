@@ -70,12 +70,18 @@ int main() {
         /* Backward pass + compute loss */
         float loss = model_backward(&model, input, target);
 
+        /* Clip gradients to prevent spikes */
+        model_clip_grad_norm(&model, 1.0f);
+
         /* Update parameters */
         model_update(&model, LEARNING_RATE);
 
         /* Print loss */
+        static float smooth_loss = 0.0f;
+        smooth_loss = (step == 0) ? loss : 0.95f * smooth_loss + 0.05f * loss;
+
         if (step % PRINT_EVERY == 0) {
-            printf("Step %d | Loss: %.4f\n", step, loss);
+            printf("Step %d | Loss: %.4f | Smooth: %.4f\n", step, loss, smooth_loss);
         }
     }
 

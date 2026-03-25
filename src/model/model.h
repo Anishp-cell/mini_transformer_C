@@ -11,6 +11,7 @@ typedef struct{
    float *pos_embedding;// [SEQ_LEN * EMBED_DIM]
    float *token_embedding;
    float *grad_token_embedding;
+   float *grad_pos_embedding;  // [SEQ_LEN * EMBED_DIM]
    float *embed_buffer; //  [SEQ_LEN * EMBED_DIM]
    TransformerBlock *blocks;
    int num_layers;
@@ -34,12 +35,15 @@ typedef struct{
    AdamParam outb_opt;
    AdamParam adam_fln_g;   // final layer norm gamma
    AdamParam adam_fln_b;   // final layer norm beta
+   AdamParam adam_pos_opt; // positional embedding
 }Model;
 void model_init(Model *m);
 void model_zero_grad(Model *m);
 void model_forward(Model *m, uint16_t *input);
 float model_backward(Model *m, uint16_t *input, uint16_t *target);
+void model_clip_grad_norm(Model *m, float max_norm);
 void model_update(Model *m, float lr);
+
 void model_free(Model *m);
 
 #endif

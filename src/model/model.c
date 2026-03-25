@@ -65,7 +65,8 @@ void model_init(Model *m){
     printf("MI: memset grad_token_embedding\n");
     m->grad_token_embedding=malloc(V*D*sizeof(float));
     memset(m->grad_token_embedding, 0, V * D * sizeof(float));
-
+    m->grad_pos_embedding=malloc(SEQ_LEN*D*sizeof(float));
+    memset(m->grad_pos_embedding, 0, SEQ_LEN * D * sizeof(float));
 
     printf("MI: output init\n");
     for(int i=0;i<D*V;i++)
@@ -90,6 +91,7 @@ void model_init(Model *m){
     adam_init_param(&m->outb_opt,   V);
     adam_init_param(&m->adam_fln_g, D);
     adam_init_param(&m->adam_fln_b, D);
+    adam_init_param(&m->adam_pos_opt, SEQ_LEN * D);
 
     printf("Model initialized.\n");
 }
@@ -99,6 +101,7 @@ void model_zero_grad(Model *m){
     memset(m->grad_b_out,          0, VOCAB_SIZE*sizeof(float));
     /* BUG FIX: token embedding grad must be zeroed each step too */
     memset(m->grad_token_embedding, 0, VOCAB_SIZE*EMBED_DIM*sizeof(float));
+    memset(m->grad_pos_embedding,   0, SEQ_LEN*EMBED_DIM*sizeof(float));
     /* BUG FIX: zero each transformer block's internal gradients */
     for(int i = 0; i < m->num_layers; i++)
         transformer_block_zero_grad(&m->blocks[i]);
@@ -174,7 +177,7 @@ float model_backward(Model *m,
         }
 
         for(int v=0;v<V;v++)
-            logits[v] /= sum;
+            logits[v] /= (sum < 1e-9f ? 1e-9f : sum);
 
         int y = target[t];
         float p = logits[y];
@@ -221,15 +224,76 @@ float model_backward(Model *m,
         );
     }
 
+    /* Token + position embedding gradients
+       Both token_embedding[token] and pos_embedding[t] fed into embed_buffer equally,
+       so dL/d(pos_embedding[t]) = dL/d(embed_buffer[t]) = same as token grad.      */
     for(int t = 0; t < SEQ_LEN; t++){
         int token = input[t];
         for(int d = 0; d < EMBED_DIM; d++){
-            m->grad_token_embedding[token * EMBED_DIM + d] +=
-                m->d_block[t * EMBED_DIM + d];
+            float g = m->d_block[t * EMBED_DIM + d];
+            m->grad_token_embedding[token * EMBED_DIM + d] += g;
+            m->grad_pos_embedding[t * EMBED_DIM + d]       += g;
         }
     }
 
     return loss / SEQ_LEN;
+}
+
+/* Clip global gradient norm to max_norm.
+   Computes L2 norm over ALL gradients in the model,
+   then scales all down uniformly if norm > max_norm.  */
+void model_clip_grad_norm(Model *m, float max_norm) {
+    int V = m->vocab_size, D = m->embed_dim;
+    float norm_sq = 0.0f;
+
+    // token + pos embeddings
+    for(int i = 0; i < V*D;       i++) norm_sq += m->grad_token_embedding[i] * m->grad_token_embedding[i];
+    for(int i = 0; i < SEQ_LEN*D; i++) norm_sq += m->grad_pos_embedding[i]   * m->grad_pos_embedding[i];
+    // output layer
+    for(int i = 0; i < D*V; i++) norm_sq += m->grad_W_out[i] * m->grad_W_out[i];
+    for(int i = 0; i < V;   i++) norm_sq += m->grad_b_out[i] * m->grad_b_out[i];
+    // final layer norm
+    for(int i = 0; i < D; i++) norm_sq += m->final_ln.grad_gamma[i] * m->final_ln.grad_gamma[i];
+    for(int i = 0; i < D; i++) norm_sq += m->final_ln.grad_beta[i]  * m->final_ln.grad_beta[i];
+    // transformer blocks
+    for(int b = 0; b < m->num_layers; b++){
+        TransformerBlock *tb = &m->blocks[b];
+        int F = tb->ff.ff_dim;
+        for(int i=0;i<D*D;i++){ norm_sq+=tb->attn.grad_Wq[i]*tb->attn.grad_Wq[i]; }
+        for(int i=0;i<D*D;i++){ norm_sq+=tb->attn.grad_Wk[i]*tb->attn.grad_Wk[i]; }
+        for(int i=0;i<D*D;i++){ norm_sq+=tb->attn.grad_Wv[i]*tb->attn.grad_Wv[i]; }
+        for(int i=0;i<D*F;i++){ norm_sq+=tb->ff.grad_W1[i]*tb->ff.grad_W1[i]; }
+        for(int i=0;i<F*D;i++){ norm_sq+=tb->ff.grad_W2[i]*tb->ff.grad_W2[i]; }
+        for(int i=0;i<F;  i++){ norm_sq+=tb->ff.grad_b1[i]*tb->ff.grad_b1[i]; }
+        for(int i=0;i<D;  i++){ norm_sq+=tb->ff.grad_b2[i]*tb->ff.grad_b2[i]; }
+        for(int i=0;i<D;  i++){ norm_sq+=tb->ln1.grad_gamma[i]*tb->ln1.grad_gamma[i]; }
+        for(int i=0;i<D;  i++){ norm_sq+=tb->ln1.grad_beta[i] *tb->ln1.grad_beta[i];  }
+        for(int i=0;i<D;  i++){ norm_sq+=tb->ln2.grad_gamma[i]*tb->ln2.grad_gamma[i]; }
+        for(int i=0;i<D;  i++){ norm_sq+=tb->ln2.grad_beta[i] *tb->ln2.grad_beta[i];  }
+    }
+
+    float norm = sqrtf(norm_sq);
+    if(norm <= max_norm) return;   // no clipping needed
+
+    float scale = max_norm / norm; // scale all grads by this factor
+
+    for(int i=0;i<V*D;      i++) m->grad_token_embedding[i] *= scale;
+    for(int i=0;i<SEQ_LEN*D;i++) m->grad_pos_embedding[i]   *= scale;
+    for(int i=0;i<D*V;i++) m->grad_W_out[i] *= scale;
+    for(int i=0;i<V;  i++) m->grad_b_out[i] *= scale;
+    for(int i=0;i<D;  i++){ m->final_ln.grad_gamma[i]*=scale; m->final_ln.grad_beta[i]*=scale; }
+
+    for(int b=0;b<m->num_layers;b++){
+        TransformerBlock *tb = &m->blocks[b];
+        int F = tb->ff.ff_dim;
+        for(int i=0;i<D*D;i++){ tb->attn.grad_Wq[i]*=scale; tb->attn.grad_Wk[i]*=scale; tb->attn.grad_Wv[i]*=scale; }
+        for(int i=0;i<D*F;i++) tb->ff.grad_W1[i]*=scale;
+        for(int i=0;i<F*D;i++) tb->ff.grad_W2[i]*=scale;
+        for(int i=0;i<F;  i++) tb->ff.grad_b1[i]*=scale;
+        for(int i=0;i<D;  i++) tb->ff.grad_b2[i]*=scale;
+        for(int i=0;i<D;  i++){ tb->ln1.grad_gamma[i]*=scale; tb->ln1.grad_beta[i]*=scale; }
+        for(int i=0;i<D;  i++){ tb->ln2.grad_gamma[i]*=scale; tb->ln2.grad_beta[i]*=scale; }
+    }
 }
 
 void model_update(Model *m, float lr){
@@ -239,8 +303,10 @@ void model_update(Model *m, float lr){
 
     adam_step(&m->opt);
 
-    // Token embedding 
-    adam_update(&m->opt, &m->emb_opt,  m->token_embedding, m->grad_token_embedding);
+    // Token embedding
+    adam_update(&m->opt, &m->emb_opt,     m->token_embedding, m->grad_token_embedding);
+    // Positional embedding
+    adam_update(&m->opt, &m->adam_pos_opt, m->pos_embedding,  m->grad_pos_embedding);
     // Output weight 
     adam_update(&m->opt, &m->outW_opt, m->W_out,           m->grad_W_out);
     // Output bias
@@ -258,6 +324,8 @@ void model_free(Model *m){
 
     free(m->token_embedding);
     free(m->pos_embedding);
+    free(m->grad_token_embedding);
+    free(m->grad_pos_embedding);
     free(m->embed_buffer);
 
     free(m->block_buffer);
@@ -288,4 +356,5 @@ void model_free(Model *m){
     adam_free_param(&m->outb_opt);
     adam_free_param(&m->adam_fln_g);
     adam_free_param(&m->adam_fln_b);
+    adam_free_param(&m->adam_pos_opt);
 }

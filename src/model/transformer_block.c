@@ -77,14 +77,15 @@ void transformer_block_backward(TransformerBlock *tb, float *input, float *d_out
     memset(tb->d_residual1, 0, SEQ_LEN*D*sizeof(float));
     memset(tb->d_ln2,       0, SEQ_LEN*D*sizeof(float));
     memset(tb->d_attn,      0, SEQ_LEN*D*sizeof(float));
-    /* d_input will accumulate gradients below — zero it first */
-    memset(d_input, 0, SEQ_LEN*D*sizeof(float));
+
     // residual 2 split- we copy d_output to d_ff and d_residual1 so that 
     // gradient can flow to both branches
     for(int i = 0; i < SEQ_LEN*D; i++){
         tb->d_ff[i]        = d_output[i];  
         tb->d_residual1[i] = d_output[i]; 
     }
+    // d_input will accumulate gradients below - zero it first 
+    memset(d_input, 0, SEQ_LEN*D*sizeof(float));
     // ffn backward
     feedforward_backward(&tb->ff, tb->ln2_out, tb->d_ff, tb->d_ln2);
     // ln2 backward

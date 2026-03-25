@@ -172,7 +172,7 @@ void attention_backward(Attention *attn, float *input, float *d_output, float *d
                 grad+= dK[t*D+k]*attn->Wk[d*D+k]; // gradient from key projection
                 grad+= dV[t*D+k]*attn->Wv[d*D+k]; // gradient from value projection
             }
-            d_input[t*D+d]= grad; // store input gradient
+            d_input[t*D+d]+= grad; // store input gradient
         }
     }  
     free(dQ);
