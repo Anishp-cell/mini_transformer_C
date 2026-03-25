@@ -16,51 +16,95 @@ static float ran_normal(){
 //model initialization
 void model_init(Model *m){
 
+    printf("MI: start\n");
+
     m->vocab_size = VOCAB_SIZE;
     m->embed_dim=EMBED_DIM;
     m->num_layers=3;
     int V= VOCAB_SIZE;
     int D= EMBED_DIM;
+
+    printf("MI: embeddings alloc\n");
     //set embeddings
     m->token_embedding= (float*)malloc(V*D*sizeof(float));
     m->pos_embedding=(float*)malloc(SEQ_LEN*D*sizeof(float));
     m->embed_buffer=(float*)malloc(SEQ_LEN*D*sizeof(float));
+
+    printf("MI: embeddings init\n");
     for(int i=0;i<V*D;i++)
         m->token_embedding[i]=ran_normal()*INIT_STD;
-    for(int i=0;i<SEQ_LEN;i++){
+    for(int i=0;i<SEQ_LEN*D;i++){
         m->pos_embedding[i]=ran_normal()*INIT_STD;
     }
+    printf("MI: blocks alloc\n");
     //initializing number of layers
     m->blocks= (TransformerBlock*)malloc(m->num_layers*sizeof(TransformerBlock));
+
+    printf("MI: blocks init loop start\n");
     for(int i=0;i<m->num_layers;i++)
         transformer_block_init(&m->blocks[i]);
-    m->block_buffer=malloc(SEQ_LEN*D*sizeof(float));
-    m->next_block_buffer=malloc(SEQ_LEN*D*sizeof(float));
+    printf("MI: blocks init done\n");
+
+    printf("MI: buffers alloc\n");
+    m->block_buffer      = malloc(SEQ_LEN*D*sizeof(float));
+    m->next_block_buffer = malloc(SEQ_LEN*D*sizeof(float));
+
+    /* Store the INPUT to each block so backward can use the correct buffer.
+       block_inputs[i] = input fed into blocks[i] during forward pass.     */
+    m->block_inputs = malloc(m->num_layers * SEQ_LEN * D * sizeof(float));
+
+    printf("MI: final ln init\n");
     layernorm_init(&m->final_ln);
+
+    printf("MI: output alloc\n");
     m->ln_out=malloc(SEQ_LEN*D*sizeof(float));
     m->W_out=malloc(D*V*sizeof(float));
     m->b_out=malloc(V*sizeof(float));
     m->grad_W_out=malloc(D*V*sizeof(float));
     m->grad_b_out=malloc(V*sizeof(float));
+    printf("MI: memset grad_token_embedding\n");
+    m->grad_token_embedding=malloc(V*D*sizeof(float));
+    memset(m->grad_token_embedding, 0, V * D * sizeof(float));
+
+
+    printf("MI: output init\n");
     for(int i=0;i<D*V;i++)
         m->W_out[i]=ran_normal()*INIT_STD;
     for(int i=0;i<V;i++){
         m->b_out[i]=0.0f;
     }
+
+    printf("MI: memset grads\n");
+    memset(m->grad_W_out, 0, D * V * sizeof(float));
+    memset(m->grad_b_out, 0, V * sizeof(float));
+
+    printf("MI: buffers alloc 2\n");
     m->logits=malloc(SEQ_LEN*V*sizeof(float));
     m->d_logits=malloc(SEQ_LEN*V*sizeof(float));
     m->d_block=malloc(SEQ_LEN*D*sizeof(float));
+
+    printf("MI: adam init\n");
+    adam_init(&m->opt, LEARNING_RATE);
+    adam_init_param(&m->emb_opt,    V * D);
+    adam_init_param(&m->outW_opt,   D * V);
+    adam_init_param(&m->outb_opt,   V);
+    adam_init_param(&m->adam_fln_g, D);
+    adam_init_param(&m->adam_fln_b, D);
+
     printf("Model initialized.\n");
 }
-// zero out gradients before backprop
-    void model_zero_grad(Model *m){
-        memset(m->grad_W_out,0,EMBED_DIM*VOCAB_SIZE*sizeof(float));
-        memset(m->grad_b_out,0,VOCAB_SIZE*sizeof(float));
-        for(int i=0;i<m->num_layers;i++){
-            layernorm_zero_grad(&m->final_ln);
-        }
-        layernorm_zero_grad(&m->final_ln);
-    }
+/* Zero out ALL gradients before backward — every parameter group */
+void model_zero_grad(Model *m){
+    memset(m->grad_W_out,          0, EMBED_DIM*VOCAB_SIZE*sizeof(float));
+    memset(m->grad_b_out,          0, VOCAB_SIZE*sizeof(float));
+    /* BUG FIX: token embedding grad must be zeroed each step too */
+    memset(m->grad_token_embedding, 0, VOCAB_SIZE*EMBED_DIM*sizeof(float));
+    /* BUG FIX: zero each transformer block's internal gradients */
+    for(int i = 0; i < m->num_layers; i++)
+        transformer_block_zero_grad(&m->blocks[i]);
+    /* zero the final layer norm gradients */
+    layernorm_zero_grad(&m->final_ln);
+}
 //forward pass
 void model_forward(Model *m, uint16_t *input){
     int V= m->vocab_size;
@@ -74,16 +118,18 @@ void model_forward(Model *m, uint16_t *input){
            m->embed_buffer[t*D+d]=tok+pos;
         }
     }
-    memcpy(m->block_buffer,m->embed_buffer,SEQ_LEN*D*sizeof(float));
-    for(int i=0;i<m->num_layers;i++){
-        transformer_block_forward(&m->blocks[i],m->block_buffer, m->next_block_buffer);
-         float *tmp = m->block_buffer;
-        m->block_buffer = m->next_block_buffer;
+    memcpy(m->block_buffer, m->embed_buffer, SEQ_LEN*D*sizeof(float));
+    for(int i = 0; i < m->num_layers; i++){
+        memcpy(&m->block_inputs[i * SEQ_LEN * D],
+               m->block_buffer,
+               SEQ_LEN * D * sizeof(float));
+        transformer_block_forward(&m->blocks[i], m->block_buffer, m->next_block_buffer);
+        float *tmp       = m->block_buffer;
+        m->block_buffer  = m->next_block_buffer;
         m->next_block_buffer = tmp;
     }
    layernorm_forward(&m->final_ln, m->block_buffer, m->ln_out);
 
-    /* ---- Output ---- */
     for(int t=0;t<SEQ_LEN;t++){
         for(int v=0;v<V;v++){
 
@@ -98,9 +144,6 @@ void model_forward(Model *m, uint16_t *input){
     }
 }
 
-/* =========================
-   BACKWARD
-========================= */
 float model_backward(Model *m,
                      uint16_t *input,
                      uint16_t *target){
@@ -112,7 +155,6 @@ float model_backward(Model *m,
 
     memset(m->d_block, 0, SEQ_LEN*D*sizeof(float));
 
-    /* ---- Softmax + CE ---- */
     for(int t=0;t<SEQ_LEN;t++){
 
         float *logits = &m->logits[t*V];
@@ -142,7 +184,6 @@ float model_backward(Model *m,
 
         logits[y] -= 1.0f;
 
-        /* ---- Output layer backward ---- */
         for(int d=0;d<D;d++){
 
             float grad = 0.0f;
@@ -161,62 +202,58 @@ float model_backward(Model *m,
             m->d_block[t*D + d] += grad;
         }
     }
-
-    /* ---- Final LN backward ---- */
+    memset(m->d_logits, 0, SEQ_LEN * EMBED_DIM * sizeof(float));
     layernorm_backward(
         &m->final_ln,
-        m->block_buffer,
-        m->d_block,
-        m->d_block
+        m->block_buffer,  
+        m->d_block,       
+        m->d_logits       
     );
+    memcpy(m->d_block, m->d_logits, SEQ_LEN * EMBED_DIM * sizeof(float));
 
-    /* ---- Blocks backward (reverse) ---- */
-    for(int i=m->num_layers-1;i>=0;i--){
-
+    for(int i = m->num_layers-1; i >= 0; i--){
+        float *block_input = &m->block_inputs[i * SEQ_LEN * EMBED_DIM];
         transformer_block_backward(
             &m->blocks[i],
-            (i==0) ? m->embed_buffer : m->blocks[i-1].ff_out,
-            m->d_block,
-            m->d_block
+            block_input,  
+            m->d_block,   
+            m->d_block    
         );
     }
 
-    /* ---- Embedding gradients ---- */
-    for(int t=0;t<SEQ_LEN;t++){
+    for(int t = 0; t < SEQ_LEN; t++){
         int token = input[t];
-
-        for(int d=0;d<D;d++){
-            m->token_embedding[token*D+d] -=
-                LEARNING_RATE * m->d_block[t*D+d];
+        for(int d = 0; d < EMBED_DIM; d++){
+            m->grad_token_embedding[token * EMBED_DIM + d] +=
+                m->d_block[t * EMBED_DIM + d];
         }
     }
 
     return loss / SEQ_LEN;
 }
 
-/* =========================
-   UPDATE
-========================= */
 void model_update(Model *m, float lr){
 
     int V = m->vocab_size;
     int D = m->embed_dim;
 
-    for(int i=0;i<D*V;i++)
-        m->W_out[i] -= lr * m->grad_W_out[i];
+    adam_step(&m->opt);
 
-    for(int i=0;i<V;i++)
-        m->b_out[i] -= lr * m->grad_b_out[i];
+    // Token embedding 
+    adam_update(&m->opt, &m->emb_opt,  m->token_embedding, m->grad_token_embedding);
+    // Output weight 
+    adam_update(&m->opt, &m->outW_opt, m->W_out,           m->grad_W_out);
+    // Output bias
+    adam_update(&m->opt, &m->outb_opt, m->b_out,           m->grad_b_out);
 
-    for(int i=0;i<m->num_layers;i++)
-        transformer_block_update(&m->blocks[i], lr);
+    for(int i = 0; i < m->num_layers; i++)
+        transformer_block_update(&m->blocks[i], &m->opt);
 
-    layernorm_update(&m->final_ln, lr);
+    // final layer norm — also updated with Adam
+    adam_update(&m->opt, &m->adam_fln_g, m->final_ln.gamma, m->final_ln.grad_gamma);
+    adam_update(&m->opt, &m->adam_fln_b, m->final_ln.beta,  m->final_ln.grad_beta);
 }
 
-/* =========================
-   FREE
-========================= */
 void model_free(Model *m){
 
     free(m->token_embedding);
@@ -225,6 +262,7 @@ void model_free(Model *m){
 
     free(m->block_buffer);
     free(m->next_block_buffer);
+    free(m->block_inputs); 
 
     for(int i=0;i<m->num_layers;i++)
         transformer_block_free(&m->blocks[i]);
@@ -235,6 +273,7 @@ void model_free(Model *m){
     free(m->b_out);
     free(m->grad_W_out);
     free(m->grad_b_out);
+    free(m->grad_token_embedding);
 
     free(m->logits);
     free(m->d_logits);
@@ -243,4 +282,10 @@ void model_free(Model *m){
     free(m->ln_out);
 
     layernorm_free(&m->final_ln);
+
+    adam_free_param(&m->emb_opt);
+    adam_free_param(&m->outW_opt);
+    adam_free_param(&m->outb_opt);
+    adam_free_param(&m->adam_fln_g);
+    adam_free_param(&m->adam_fln_b);
 }

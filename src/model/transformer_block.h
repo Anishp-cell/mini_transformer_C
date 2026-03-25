@@ -4,6 +4,7 @@
 #include "../layers/layernorm.h"
 #include "../attention/attention.h"
 #include "../layers/feedforward.h"
+#include "../optim/adam.h"
 
 typedef struct {
 
@@ -28,6 +29,12 @@ typedef struct {
     float *d_ln2;
     float *d_ff;
 
+    // Adam optimizer params — one per weight tensor
+    AdamParam adam_Wq, adam_Wk, adam_Wv;          // attention projections
+    AdamParam adam_W1, adam_b1, adam_W2, adam_b2;  // feedforward weights/biases
+    AdamParam adam_ln1_g, adam_ln1_b;              // LN1 gamma, beta
+    AdamParam adam_ln2_g, adam_ln2_b;              // LN2 gamma, beta
+
 } TransformerBlock;
 
 void transformer_block_init(TransformerBlock *tb);
@@ -46,7 +53,7 @@ void transformer_block_backward(
     float *d_input
 );
 
-void transformer_block_update(TransformerBlock *tb, float lr);
+void transformer_block_update(TransformerBlock *tb, AdamOptimizer *opt);
 void transformer_block_free(TransformerBlock *tb);
 
 #endif

@@ -19,7 +19,9 @@ void adam_init_param(AdamParam *p, int size);
 void adam_free_param(AdamParam *p);
 
 void adam_init(AdamOptimizer *opt, float lr);
+void adam_step(AdamOptimizer *opt);
 
-void adam_update(AdamOptimizer *opt,AdamParam *p,float *weights,float *grads);
+void adam_update(AdamOptimizer *opt, AdamParam *p, float *weights, float *grads);
+
 
 #endif
