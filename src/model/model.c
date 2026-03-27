@@ -83,6 +83,7 @@ void model_init(Model *m){
     m->logits=malloc(SEQ_LEN*V*sizeof(float));
     m->d_logits=malloc(SEQ_LEN*V*sizeof(float));
     m->d_block=malloc(SEQ_LEN*D*sizeof(float));
+    m->d_ln_out=malloc(SEQ_LEN*D*sizeof(float));
 
     printf("MI: adam init\n");
     adam_init(&m->opt, LEARNING_RATE);
@@ -147,16 +148,9 @@ void model_forward(Model *m, uint16_t *input){
     }
 }
 
-float model_backward(Model *m,
-                     uint16_t *input,
-                     uint16_t *target){
-
+float model_loss(Model *m, uint16_t *target) {
     int V = m->vocab_size;
-    int D = m->embed_dim;
-
     float loss = 0.0f;
-
-    memset(m->d_block, 0, SEQ_LEN*D*sizeof(float));
 
     for(int t=0;t<SEQ_LEN;t++){
 
@@ -185,14 +179,29 @@ float model_backward(Model *m,
 
         loss += -logf(p);
 
-        logits[y] -= 1.0f;
+        for(int v=0; v<V; v++){
+            m->d_logits[t*V + v] = logits[v];
+        }
+        m->d_logits[t*V + y] -= 1.0f;
+    }
+    return loss / SEQ_LEN;
+}
+
+void model_backward(Model *m, uint16_t *input){
+
+    int V = m->vocab_size;
+    int D = m->embed_dim;
+
+    memset(m->d_block, 0, SEQ_LEN*D*sizeof(float));
+
+    for(int t=0;t<SEQ_LEN;t++){
 
         for(int d=0;d<D;d++){
 
             float grad = 0.0f;
 
             for(int v=0;v<V;v++){
-                float dz = logits[v];
+                float dz = m->d_logits[t*V + v];;
 
                 m->grad_W_out[d*V+v] +=
                     m->ln_out[t*D+d] * dz;
@@ -205,14 +214,14 @@ float model_backward(Model *m,
             m->d_block[t*D + d] += grad;
         }
     }
-    memset(m->d_logits, 0, SEQ_LEN * EMBED_DIM * sizeof(float));
+    memset(m->d_ln_out, 0, SEQ_LEN * EMBED_DIM * sizeof(float));
     layernorm_backward(
         &m->final_ln,
         m->block_buffer,  
         m->d_block,       
-        m->d_logits       
+        m->d_ln_out       
     );
-    memcpy(m->d_block, m->d_logits, SEQ_LEN * EMBED_DIM * sizeof(float));
+    memcpy(m->d_block, m->d_ln_out, SEQ_LEN * EMBED_DIM * sizeof(float));
 
     for(int i = m->num_layers-1; i >= 0; i--){
         float *block_input = &m->block_inputs[i * SEQ_LEN * EMBED_DIM];
@@ -236,8 +245,8 @@ float model_backward(Model *m,
         }
     }
 
-    return loss / SEQ_LEN;
 }
+
 
 /* Clip global gradient norm to max_norm.
    Computes L2 norm over ALL gradients in the model,
@@ -348,6 +357,7 @@ void model_free(Model *m){
     free(m->d_block);
 
     free(m->ln_out);
+    free(m->d_ln_out);
 
     layernorm_free(&m->final_ln);
 

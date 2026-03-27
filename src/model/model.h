@@ -29,6 +29,8 @@ typedef struct{
    float *logits;
    float *d_logits;
    float *d_block;
+   float *d_ln_out;
+
    AdamOptimizer opt;
    AdamParam emb_opt;
    AdamParam outW_opt;
@@ -40,7 +42,8 @@ typedef struct{
 void model_init(Model *m);
 void model_zero_grad(Model *m);
 void model_forward(Model *m, uint16_t *input);
-float model_backward(Model *m, uint16_t *input, uint16_t *target);
+float model_loss(Model *m, uint16_t *target);
+void model_backward(Model *m, uint16_t *input);
 void model_clip_grad_norm(Model *m, float max_norm);
 void model_update(Model *m, float lr);
 

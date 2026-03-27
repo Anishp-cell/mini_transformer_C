@@ -67,11 +67,19 @@ int main() {
         /* Forward pass */
         model_forward(&model, input);
 
-        /* Backward pass + compute loss */
-        float loss = model_backward(&model, input, target);
+        /* Compute Loss + d_logits */
+        float loss = model_loss(&model, target);
+
+        /* Backward pass */
+        model_backward(&model, input);
 
         /* Clip gradients to prevent spikes */
         model_clip_grad_norm(&model, 1.0f);
+
+        /* Print Gradient Sanity Check every 100 steps */
+        if (step % PRINT_EVERY == 0) {
+            printf("Grad Sanity (W_out[0]): %f\n", model.grad_W_out[0]);
+        }
 
         /* Update parameters */
         model_update(&model, LEARNING_RATE);
