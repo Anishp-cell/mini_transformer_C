@@ -46,6 +46,8 @@ float model_loss(Model *m, uint16_t *target);
 void model_backward(Model *m, uint16_t *input);
 void model_clip_grad_norm(Model *m, float max_norm);
 void model_update(Model *m, float lr);
+void model_save(Model *m, const char *path);
+void model_load(Model *m, const char *path);
 
 void model_free(Model *m);
 

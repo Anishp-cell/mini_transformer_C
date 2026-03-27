@@ -10,15 +10,15 @@
    Model Dimensions (Phase 1)
    Keep small for debugging
 ================================ */
-#define EMBED_DIM 64      // Embedding size
-#define SEQ_LEN 64        // Training sequence length
+#define EMBED_DIM 128     // Scaled up for better capacity (i7 CPU)
+#define SEQ_LEN 64        // Sequence Length
 
 /* ================================
    Training Hyperparameters
 ================================ */
 #define LEARNING_RATE 0.0003f
-#define TRAIN_STEPS 2000      // Total update steps
-#define PRINT_EVERY 100       // Print loss every N steps
+#define TRAIN_STEPS 30000     // Enough steps to learn character mapping
+#define PRINT_EVERY 500       // Print less frequently
 
 /* ================================
    Random Initialization

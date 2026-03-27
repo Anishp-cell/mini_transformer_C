@@ -15,17 +15,15 @@ static float ran_normal(){
 
 //model initialization
 void model_init(Model *m){
-
     printf("MI: start\n");
-
     m->vocab_size = VOCAB_SIZE;
     m->embed_dim=EMBED_DIM;
     m->num_layers=3;
     int V= VOCAB_SIZE;
     int D= EMBED_DIM;
 
-    printf("MI: embeddings alloc\n");
     //set embeddings
+    printf("MI: embeddings alloc\n");
     m->token_embedding= (float*)malloc(V*D*sizeof(float));
     m->pos_embedding=(float*)malloc(SEQ_LEN*D*sizeof(float));
     m->embed_buffer=(float*)malloc(SEQ_LEN*D*sizeof(float));
@@ -36,8 +34,8 @@ void model_init(Model *m){
     for(int i=0;i<SEQ_LEN*D;i++){
         m->pos_embedding[i]=ran_normal()*INIT_STD;
     }
-    printf("MI: blocks alloc\n");
     //initializing number of layers
+    printf("MI: blocks alloc\n");
     m->blocks= (TransformerBlock*)malloc(m->num_layers*sizeof(TransformerBlock));
 
     printf("MI: blocks init loop start\n");
@@ -62,8 +60,8 @@ void model_init(Model *m){
     m->b_out=malloc(V*sizeof(float));
     m->grad_W_out=malloc(D*V*sizeof(float));
     m->grad_b_out=malloc(V*sizeof(float));
-    printf("MI: memset grad_token_embedding\n");
     m->grad_token_embedding=malloc(V*D*sizeof(float));
+    printf("MI: memset grad_token_embedding\n");
     memset(m->grad_token_embedding, 0, V * D * sizeof(float));
     m->grad_pos_embedding=malloc(SEQ_LEN*D*sizeof(float));
     memset(m->grad_pos_embedding, 0, SEQ_LEN * D * sizeof(float));
@@ -246,7 +244,7 @@ void model_backward(Model *m, uint16_t *input){
     }
 
 }
-
+  
 
 /* Clip global gradient norm to max_norm.
    Computes L2 norm over ALL gradients in the model,
@@ -367,4 +365,88 @@ void model_free(Model *m){
     adam_free_param(&m->adam_fln_g);
     adam_free_param(&m->adam_fln_b);
     adam_free_param(&m->adam_pos_opt);
+}
+
+// Save model weights to a binary file
+void model_save(Model *m, const char *path) {
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        printf("Failed to open %s for saving.\n", path);
+        return;
+    }
+    int V = m->vocab_size;
+    int D = m->embed_dim;
+    
+    fwrite(m->token_embedding, sizeof(float), V * D, f);
+    fwrite(m->pos_embedding, sizeof(float), SEQ_LEN * D, f);
+    
+    for (int i = 0; i < m->num_layers; i++) {
+        TransformerBlock *tb = &m->blocks[i];
+        int F = tb->ff.ff_dim;
+        fwrite(tb->attn.Wq, sizeof(float), D * D, f);
+        fwrite(tb->attn.Wk, sizeof(float), D * D, f);
+        fwrite(tb->attn.Wv, sizeof(float), D * D, f);
+        
+        fwrite(tb->ln1.gamma, sizeof(float), D, f);
+        fwrite(tb->ln1.beta, sizeof(float), D, f);
+        
+        fwrite(tb->ff.W1, sizeof(float), D * F, f);
+        fwrite(tb->ff.b1, sizeof(float), F, f);
+        fwrite(tb->ff.W2, sizeof(float), F * D, f);
+        fwrite(tb->ff.b2, sizeof(float), D, f);
+        
+        fwrite(tb->ln2.gamma, sizeof(float), D, f);
+        fwrite(tb->ln2.beta, sizeof(float), D, f);
+    }
+    
+    fwrite(m->final_ln.gamma, sizeof(float), D, f);
+    fwrite(m->final_ln.beta, sizeof(float), D, f);
+    
+    fwrite(m->W_out, sizeof(float), D * V, f);
+    fwrite(m->b_out, sizeof(float), V, f);
+    
+    fclose(f);
+    printf("Model saved to %s.\n", path);
+}
+
+// Load model weights from a binary file
+void model_load(Model *m, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        printf("Failed to open %s for loading.\n", path);
+        exit(1);
+    }
+    int V = m->vocab_size;
+    int D = m->embed_dim;
+    
+    fread(m->token_embedding, sizeof(float), V * D, f);
+    fread(m->pos_embedding, sizeof(float), SEQ_LEN * D, f);
+    
+    for (int i = 0; i < m->num_layers; i++) {
+        TransformerBlock *tb = &m->blocks[i];
+        int F = tb->ff.ff_dim;
+        fread(tb->attn.Wq, sizeof(float), D * D, f);
+        fread(tb->attn.Wk, sizeof(float), D * D, f);
+        fread(tb->attn.Wv, sizeof(float), D * D, f);
+        
+        fread(tb->ln1.gamma, sizeof(float), D, f);
+        fread(tb->ln1.beta, sizeof(float), D, f);
+        
+        fread(tb->ff.W1, sizeof(float), D * F, f);
+        fread(tb->ff.b1, sizeof(float), F, f);
+        fread(tb->ff.W2, sizeof(float), F * D, f);
+        fread(tb->ff.b2, sizeof(float), D, f);
+        
+        fread(tb->ln2.gamma, sizeof(float), D, f);
+        fread(tb->ln2.beta, sizeof(float), D, f);
+    }
+    
+    fread(m->final_ln.gamma, sizeof(float), D, f);
+    fread(m->final_ln.beta, sizeof(float), D, f);
+    
+    fread(m->W_out, sizeof(float), D * V, f);
+    fread(m->b_out, sizeof(float), V, f);
+    
+    fclose(f);
+    printf("Model loaded from %s.\n", path);
 }

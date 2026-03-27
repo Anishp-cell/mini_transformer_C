@@ -5,7 +5,6 @@
 
 void transformer_block_init(TransformerBlock *tb){
     printf("TB: start\n");
-
     tb->embed_dim=EMBED_DIM;
     int D= EMBED_DIM;
 
@@ -36,6 +35,7 @@ void transformer_block_init(TransformerBlock *tb){
     tb->d_ln2=malloc(SEQ_LEN*D*sizeof(float));
     tb->d_ff=malloc(SEQ_LEN*D*sizeof(float));
 
+
     int F = FF_DIM;
     adam_init_param(&tb->adam_Wq,    D*D);
     adam_init_param(&tb->adam_Wk,    D*D);
@@ -48,7 +48,6 @@ void transformer_block_init(TransformerBlock *tb){
     adam_init_param(&tb->adam_ln1_b, D);
     adam_init_param(&tb->adam_ln2_g, D);
     adam_init_param(&tb->adam_ln2_b, D);
-
     printf("transformer block initialized\n");
 }
 void transformer_block_zero_grad(TransformerBlock *tb){

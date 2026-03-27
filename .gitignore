@@ -1,0 +1,26 @@
+# Virtual Environments
+venv/
+env/
+.env
+
+# Compiled executables and objects
+*.exe
+*.o
+*.obj
+*.out
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Data and Models (Optional based on if you want weights in Github)
+# Uncomment the line below if you don't want to push your 2.2MB model weights
+# model.bin
